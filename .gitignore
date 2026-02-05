@@ -32,6 +32,8 @@ wheels/
 # Alert data
 alerts.json
 whale_settings.json
+rsi_alerts.json
+channel_settings.json
 
 # Logs
 *.log
