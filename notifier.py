@@ -2,11 +2,13 @@
 Discord notification system for Trading Alert Bot
 """
 import requests
+import asyncio
 from typing import Dict, Optional, Literal
 from datetime import datetime
 
 from config import DISCORD_WEBHOOKS
 from utils.logger import setup_logger
+from utils.channel_settings import get_channel
 
 logger = setup_logger(__name__, "notifier.log")
 
@@ -33,9 +35,14 @@ class DiscordNotifier:
         "kr_stock": "🇰🇷",
     }
     
-    def __init__(self):
+    def __init__(self, bot=None):
         self.webhooks = DISCORD_WEBHOOKS
+        self.bot = bot  # Discord bot instance for direct channel messaging
         self._validate_webhooks()
+    
+    def set_bot(self, bot):
+        """Set the Discord bot instance"""
+        self.bot = bot
     
     def _validate_webhooks(self) -> None:
         """Validate that at least one webhook is configured"""
@@ -204,6 +211,76 @@ class DiscordNotifier:
             return True
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to send test message: {e}")
+            return False
+    
+    def send_whale_alert(self, message: str) -> bool:
+        """Send whale alert to crypto webhook or configured channel"""
+        # Check if channel is configured
+        channel_id = get_channel("whale")
+        if channel_id and self.bot:
+            try:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    asyncio.create_task(channel.send(message))
+                    logger.info("Whale alert sent to configured channel")
+                    return True
+            except Exception as e:
+               logger.error(f"Failed to send to channel: {e}")
+        
+        # Fallback to webhook
+        webhook_url = self.webhooks.get("crypto")
+        
+        if not webhook_url:
+            logger.error("No webhook configured for crypto market")
+            return False
+        
+        payload = {
+            "content": message,
+            "username": "🐋 Whale Alert Bot"
+        }
+        
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("Whale alert sent via webhook")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send whale alert: {e}")
+            return False
+    
+    def send_crypto_alert(self, message: str) -> bool:
+        """Send crypto-related alert (volume, etc) to crypto webhook or configured channel"""
+        # Check if channel is configured
+        channel_id = get_channel("volume")  # Use volume channel for now
+        if channel_id and self.bot:
+            try:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    asyncio.create_task(channel.send(message))
+                    logger.info("Crypto alert sent to configured channel")
+                    return True
+            except Exception as e:
+                logger.error(f"Failed to send to channel: {e}")
+        
+        # Fallback to webhook
+        webhook_url = self.webhooks.get("crypto")
+        
+        if not webhook_url:
+            logger.error("No webhook configured for crypto market")
+            return False
+        
+        payload = {
+            "content": message,
+            "username": "📊 Crypto Alert Bot"
+        }
+        
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("Crypto alert sent via webhook")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send crypto alert: {e}")
             return False
     
     def send_system_message(

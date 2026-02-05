@@ -62,7 +62,14 @@ async def help_command(ctx):
     
     embed.add_field(
         name="🔔 가격 알람",
-        value="`!알람추가 crypto BTC above 100000`\n`!알람목록` - 알람 목록\n`!알람삭제 [ID]` - 알람 삭제",
+        value=(
+            "`!알람 BTC > 100000` - 심볼 자동감지 (추천!)\n"
+            "`!알람 ETH 4h RSI < 20` - RSI 알람\n"
+            "`!알람추가 crypto BTC above 100000` - 수동\n"
+            "`!알람목록` - 알람 목록\n"
+            "`!알람삭제` - 드롭다운으로 선택\n"
+            "`!알람삭제 [ID]` - ID로 직접 삭제"
+        ),
         inline=False
     )
     
@@ -81,6 +88,12 @@ async def help_command(ctx):
     embed.add_field(
         name="📊 거래량 알람",
         value="`!거래량알람 on` - 거래량 급증 알람 활성화\n`!거래량알람 상태` - 상태 확인\n`!거래량임계값 200` - 임계값 설정",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📢 알람 채널 설정",
+        value="`!알람채널 whale` - 이 채널을 고래 알람 채널로\n`!알람채널 확인` - 설정 확인\n`!알람채널 초기화` - 웹훅으로 복귀",
         inline=False
     )
     
@@ -245,6 +258,96 @@ async def add_alert(ctx, market: str = None, symbol: str = None, condition: str 
         await ctx.send("❌ 알람 추가 실패")
 
 
+@bot.command(name="알람")
+async def smart_add_alert(ctx, symbol: str = None, *args):
+    """Smart alert - auto-detect market and parse condition"""
+    if not symbol or not args:
+        await ctx.send(
+            "❌ 사용법:\n"
+            "`!알람 BTC > 100000` - 비트코인 10만 달러 이상\n"
+            "`!알람 ORCL < 123` - 오라클 123 이하\n"
+            "`!알람 삼성전자 10만 이상` - 삼성전자 10만원 이상\n"
+            "`!알람 ETH 4h RSI < 20` - 이더리움 4시간봉 RSI 20 미만\n"
+            "`!알람 TSLA 1d RSI > 70` - 테슬라 일봉 RSI 70 초과"
+        )
+        return
+    
+    from utils.smart_parser import (
+        detect_market, parse_condition, normalize_symbol,
+        is_rsi_condition, parse_rsi_condition
+    )
+    
+    # Join remaining args as condition
+    condition_text = " ".join(args)
+    
+    try:
+        # Auto-detect market
+        market = detect_market(symbol)
+        
+        # Normalize symbol
+        normalized_symbol = normalize_symbol(symbol, market)
+        
+        # Check if RSI condition
+        if is_rsi_condition(condition_text):
+            # RSI Alert
+            timeframe, condition, rsi_value = parse_rsi_condition(condition_text)
+            
+            from utils.rsi_alerts import add_rsi_alert
+            from monitors.rsi_alert_monitor import get_rsi_monitor, set_rsi_monitor, RSIAlertMonitor
+            from notifier import DiscordNotifier
+            
+            # Add RSI alert
+            alert = add_rsi_alert(market, normalized_symbol, timeframe, condition, rsi_value)
+            
+            # Start RSI monitor if not running
+            monitor = get_rsi_monitor()
+            if not monitor:
+                notifier = DiscordNotifier(bot)
+                monitor = RSIAlertMonitor(notifier, bot.alert_manager)
+                set_rsi_monitor(monitor)
+                monitor.enable()
+            
+            market_names = {"crypto": "🪙 암호화폐", "us_stock": "🇺🇸 미국 주식", "kr_stock": "🇰🇷 한국 주식"}
+            condition_names = {"above": "초과", "below": "미만"}
+            
+            embed = discord.Embed(title="✅ RSI 알람 추가 완료", color=discord.Color.blue())
+            embed.add_field(name="시장", value=market_names[market], inline=True)
+            embed.add_field(name="심볼", value=normalized_symbol, inline=True)
+            embed.add_field(name="타임프레임", value=timeframe, inline=True)
+            embed.add_field(name="조건", value=f"RSI {rsi_value:.0f} {condition_names[condition]}", inline=True)
+            embed.add_field(name="알람 ID", value=f"`{alert.id[:8]}`", inline=False)
+            embed.set_footer(text=f"봉 마감 시점에 체크됩니다 ({timeframe})")
+            
+            await ctx.send(embed=embed)
+        
+        else:
+            # Price Alert
+            condition, price = parse_condition(condition_text)
+            
+            # Add alert
+            alert = bot.alert_manager.add_alert(market, normalized_symbol, condition, price)
+            
+            if alert:
+                market_names = {"crypto": "🪙 암호화폐", "us_stock": "🇺🇸 미국 주식", "kr_stock": "🇰🇷 한국 주식"}
+                condition_names = {"above": "이상", "below": "이하"}
+                
+                embed = discord.Embed(title="✅ 알람 추가 완료", color=discord.Color.green())
+                embed.add_field(name="시장", value=market_names[market], inline=True)
+                embed.add_field(name="심볼", value=normalized_symbol, inline=True)
+                embed.add_field(name="조건", value=f"{price:,.0f} {condition_names[condition]}", inline=True)
+                embed.add_field(name="알람 ID", value=f"`{alert.id[:8]}`", inline=False)
+                embed.set_footer(text=f"자동 감지: {market}")
+                
+                await ctx.send(embed=embed)
+            else:
+                await ctx.send("❌ 알람 추가 실패")
+            
+    except ValueError as e:
+        await ctx.send(f"❌ 조건 파싱 실패: {e}")
+    except Exception as e:
+        await ctx.send(f"❌ 오류: {e}")
+
+
 @bot.command(name="알람목록", aliases=["list", "l"])
 async def list_alerts(ctx, market: str = "all"):
     """List all configured alerts"""
@@ -278,32 +381,76 @@ async def list_alerts(ctx, market: str = "all"):
 
 @bot.command(name="알람삭제", aliases=["del", "d"])
 async def remove_alert(ctx, alert_id: str = None):
-    """Remove an alert by ID"""
-    if not alert_id:
-        await ctx.send("❌ 사용법: `!알람삭제 [알람ID]`")
-        return
-    
+    """Remove an alert - with dropdown menu if no ID provided"""
     alerts = bot.alert_manager.get_alerts()
-    matching_alert = None
     
-    for alert in alerts:
-        if alert.id.startswith(alert_id) or alert.id == alert_id:
-            matching_alert = alert
-            break
-    
-    if not matching_alert:
-        await ctx.send(f"❌ ID `{alert_id}`를 찾을 수 없습니다.")
+    if not alerts:
+        await ctx.send("📭 삭제할 알람이 없습니다.")
         return
     
-    if bot.alert_manager.remove_alert(matching_alert.id):
-        embed = discord.Embed(
-            title="🗑️ 알람 삭제 완료",
-            description=f"**{matching_alert.symbol}** {matching_alert.condition} {matching_alert.price:,.0f}",
-            color=discord.Color.orange()
+    # If alert_id provided, delete directly (old way still works)
+    if alert_id:
+        matching_alert = None
+        for alert in alerts:
+            if alert.id.startswith(alert_id):
+                matching_alert = alert
+                break
+        
+        if matching_alert:
+            bot.alert_manager.remove_alert(matching_alert.id)
+            await ctx.send(f"✅ 알람 삭제됨: `{matching_alert.symbol}` {matching_alert.condition} {matching_alert.price:,.0f}")
+        else:
+            await ctx.send(f"❌ 알람 ID `{alert_id}`를 찾을 수 없습니다.")
+        return
+    
+    # Show dropdown menu
+    market_emojis = {"crypto": "🪙", "us_stock": "🇺🇸", "kr_stock": "🇰🇷"}
+    condition_symbols = {"above": "≥", "below": "≤"}
+    
+    # Create select menu options (max 25)
+    options = []
+    for alert in alerts[:25]:
+        emoji = market_emojis.get(alert.market, "📊")
+        cond = condition_symbols.get(alert.condition, "?")
+        label = f"{emoji} {alert.symbol} {cond} {alert.price:,.0f}"
+        options.append(
+            discord.SelectOption(
+                label=label[:100],  # Discord limit
+                value=alert.id,
+                description=f"ID: {alert.id[:8]}"
+            )
         )
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("❌ 알람 삭제 실패")
+    
+    # Create View with Select
+    class AlertDeleteView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+        
+        @discord.ui.select(
+            placeholder="삭제할 알람을 선택하세요",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
+            selected_id = select.values[0]
+            
+            # Find and delete alert
+            for alert in alerts:
+                if alert.id == selected_id:
+                    bot.alert_manager.remove_alert(selected_id)
+                    await interaction.response.send_message(
+                        f"✅ 알람 삭제됨: `{alert.symbol}` {alert.condition} {alert.price:,.0f}",
+                        ephemeral=True
+                    )
+                    # Disable the view
+                    self.stop()
+                    return
+            
+            await interaction.response.send_message("❌ 알람을 찾을 수 없습니다.", ephemeral=True)
+    
+    view = AlertDeleteView()
+    await ctx.send("🗑️ **삭제할 알람을 선택하세요:**", view=view)
 
 
 @bot.command(name="상태", aliases=["status", "s"])
@@ -725,6 +872,80 @@ async def set_volume_threshold(ctx, percent: int = None):
     
     await ctx.send(embed=embed)
 
+
+# ============================================================
+# Alert Channel Settings
+# ============================================================
+
+@bot.command(name="알람채널", aliases=["alertchannel"])
+async def set_alert_channel(ctx, alert_type: str = None, action: str = None):
+    """Set alert channel for specific alert type"""
+    if not alert_type:
+        await ctx.send(
+            "❌ 사용법:\n"
+            "`!알람채널 crypto` - 현재 채널을 암호화폐 알람 채널로\n"
+            "`!알람채널 whale` - 고래 알람 채널로\n"
+            "`!알람채널 volume` - 거래량 알람 채널로\n"
+            "`!알람채널 확인` - 설정된 채널 확인\n"
+            "`!알람채널 초기화` - 모든 설정 초기화"
+        )
+        return
+    
+    from utils.channel_settings import (
+        set_channel, get_channel, reset_channel, 
+        reset_all_channels, load_channel_settings
+    )
+    
+    if alert_type in ["확인", "check", "status"]:
+        settings = load_channel_settings()
+        
+        embed = discord.Embed(title="📢 알람 채널 설정", color=discord.Color.blue())
+        
+        for key, channel_id in settings.items():
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                value = f"<#{channel_id}>" if channel else f"ID: {channel_id}"
+            else:
+                value = "웹훅 사용 중"
+            
+            emoji_map = {
+                "crypto": "🪙",
+                "whale": "🐋",
+                "volume": "📊",
+                "us_stock": "🇺🇸",
+                "kr_stock": "🇰🇷"
+            }
+            
+            embed.add_field(
+                name=f"{emoji_map.get(key, '📢')} {key.replace('_', ' ').title()}",
+                value=value,
+                inline=False
+            )
+        
+        await ctx.send(embed=embed)
+        return
+    
+    if alert_type in ["초기화", "reset"]:
+        reset_all_channels()
+        await ctx.send("✅ 모든 알람 채널 설정이 초기화되었습니다. 웹훅 방식으로 돌아갑니다.")
+        return
+    
+    # Set channel
+    if alert_type.lower() in ["crypto", "whale", "volume", "us_stock", "kr_stock"]:
+        set_channel(alert_type.lower(), ctx.channel.id)
+        
+        embed = discord.Embed(
+            title="✅ 알람 채널 설정 완료",
+            description=f"**{alert_type.upper()}** 알람이 이 채널로 전송됩니다.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="채널", value=ctx.channel.mention, inline=True)
+        embed.add_field(name="채널 ID", value=ctx.channel.id, inline=True)
+        embed.set_footer(text="웹훅 대신 이 채널로 알람이 전송됩니다")
+        
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"❌ 알 수 없는 알람 타입: `{alert_type}`\n사용 가능: crypto, whale, volume, us_stock, kr_stock")
 
 
 def run_bot():

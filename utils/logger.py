@@ -54,3 +54,6 @@ def setup_logger(
 
 # Create default logger
 default_logger = setup_logger("trading_alert_bot", "app.log")
+
+# Export as 'logger' for convenience
+logger = default_logger
