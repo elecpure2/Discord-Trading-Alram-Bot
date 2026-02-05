@@ -79,6 +79,12 @@ async def help_command(ctx):
     )
     
     embed.add_field(
+        name="📊 거래량 알람",
+        value="`!거래량알람 on` - 거래량 급증 알람 활성화\n`!거래량알람 상태` - 상태 확인\n`!거래량임계값 200` - 임계값 설정",
+        inline=False
+    )
+    
+    embed.add_field(
         name="⚙️ 시스템",
         value="`!상태` - 알람 시스템 상태",
         inline=False
@@ -628,6 +634,97 @@ async def toggle_exchange(ctx, exchange: str = None, action: str = None):
     embed.set_footer(text="변경사항은 봇 재시작 후 적용됩니다")
     
     await ctx.send(embed=embed)
+
+
+# ============================================================
+# Volume Spike Alert Commands
+# ============================================================
+
+@bot.command(name="거래량알람", aliases=["volume"])
+async def volume_alert_toggle(ctx, action: str = None):
+    """Enable/disable volume spike alerts"""
+    if not action:
+        await ctx.send("❌ 사용법: `!거래량알람 on` / `!거래량알람 off` / `!거래량알람 상태`")
+        return
+    
+    from monitors.volume_monitor import get_volume_monitor, set_volume_monitor, VolumeMonitor
+    from notifier import DiscordNotifier
+    
+    monitor = get_volume_monitor()
+    
+    if action.lower() in ["on", "활성화", "enable"]:
+        if not monitor:
+            notifier = DiscordNotifier()
+            monitor = VolumeMonitor(notifier)
+            set_volume_monitor(monitor)
+        
+        monitor.enable()
+        
+        embed = discord.Embed(title="📊 거래량 알람 활성화", color=discord.Color.blue())
+        embed.add_field(name="모니터링", value=", ".join(monitor.symbols), inline=True)
+        embed.add_field(name="임계값", value=f"{monitor.threshold_percent}%", inline=True)
+        embed.set_footer(text="임계값 변경: !거래량임계값 200")
+        
+        await ctx.send(embed=embed)
+        
+    elif action.lower() in ["off", "비활성화", "disable"]:
+        if monitor:
+            monitor.disable()
+        await ctx.send("📊 거래량 알람 비활성화됨")
+        
+    else:  # status
+        if not monitor:
+            await ctx.send("📊 거래량 알람이 설정되지 않았습니다.")
+            return
+        
+        status = monitor.get_status()
+        
+        embed = discord.Embed(
+            title="📊 거래량 알람 상태",
+            color=discord.Color.blue() if status["enabled"] else discord.Color.gray()
+        )
+        embed.add_field(name="상태", value="🟢 활성화" if status["enabled"] else "🔴 비활성화", inline=True)
+        embed.add_field(name="모니터링", value=", ".join(status["symbols"]), inline=True)
+        embed.add_field(name="임계값", value=f"{status['threshold_percent']}%", inline=True)
+        
+        # Show average volumes
+        if status["avg_volumes"]:
+            avg_info = []
+            for symbol, vol in status["avg_volumes"].items():
+                avg_info.append(f"{symbol}: {vol:.0f}")
+            embed.add_field(name="4시간 평균 거래량", value="\n".join(avg_info), inline=False)
+        
+        await ctx.send(embed=embed)
+
+
+@bot.command(name="거래량임계값")
+async def set_volume_threshold(ctx, percent: int = None):
+    """Set volume spike threshold percentage"""
+    if not percent:
+        await ctx.send("❌ 사용법: `!거래량임계값 200` (200% = 2배)")
+        return
+    
+    if percent < 100 or percent > 1000:
+        await ctx.send("❌ 임계값은 100%~1000% 사이여야 합니다.")
+        return
+    
+    from monitors.volume_monitor import get_volume_monitor, set_volume_monitor, VolumeMonitor
+    from notifier import DiscordNotifier
+    
+    monitor = get_volume_monitor()
+    if not monitor:
+        notifier = DiscordNotifier()
+        monitor = VolumeMonitor(notifier)
+        set_volume_monitor(monitor)
+    
+    monitor.set_threshold(percent)
+    
+    embed = discord.Embed(title="📊 거래량 임계값 설정", color=discord.Color.green())
+    embed.add_field(name="임계값", value=f"{percent}%", inline=True)
+    embed.add_field(name="의미", value=f"평균 대비 {percent/100:.1f}배", inline=True)
+    
+    await ctx.send(embed=embed)
+
 
 
 def run_bot():
