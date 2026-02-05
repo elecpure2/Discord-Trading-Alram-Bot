@@ -1,0 +1,19 @@
+# Core dependencies
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Discord bot
+discord.py>=2.3.0
+
+# WebSocket for crypto
+websocket-client>=1.7.0
+
+# Stock market data
+yfinance>=0.2.36
+
+# Utilities
+colorama>=0.4.6
+
+# Technical indicators
+pandas>=2.0.0
+numpy>=1.24.0
